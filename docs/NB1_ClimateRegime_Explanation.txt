@@ -1,0 +1,521 @@
+================================================================================
+  NB1_ClimateRegime.ipynb — Line-by-Line Explanation
+  PyAEZ Pakistan Adaptation
+================================================================================
+
+PURPOSE
+-------
+Module 1 (Climate Regime) is the foundation of the entire PyAEZ pipeline.
+It takes raw climate and geographic data as input and produces a set of
+agro-climatic indicators that describe how suitable each grid cell in Pakistan
+is for agriculture. All outputs from this module feed into Modules 2 through 6.
+
+================================================================================
+SECTION 1 — SETUP AND IMPORTS
+================================================================================
+
+--- Cell 2 (commented out) ---
+# from google.colab import drive
+# drive.mount('/content/gdrive', force_remount=True)
+  These lines are for running on Google Colab (cloud). They are commented out
+  because we are running locally on our own machine.
+
+--- Cell 4 (commented out) ---
+# !pip install gdal
+  This would install GDAL inside a Colab environment. Already installed via
+  conda on our system, so it is commented out.
+
+--- Cell 6 — Import libraries ---
+import numpy as np
+  NumPy is the core numerical library. All climate data arrays are NumPy arrays.
+
+import matplotlib.pyplot as plt
+  Matplotlib is used to create and save all the map plots (PNG images).
+
+import os
+  Python's built-in module for file and directory operations.
+
+try:
+    from osgeo import gdal
+except:
+    import gdal
+  GDAL (Geospatial Data Abstraction Library) is used to read and write GeoTIFF
+  raster files. The try/except handles two different ways GDAL can be installed:
+  - Newer installations use 'from osgeo import gdal'
+  - Older installations use 'import gdal' directly
+
+import sys
+  Used to modify the Python module search path so that 'pyaez' can be found.
+
+--- Cell 8 — Set working directory ---
+work_dir = '.'
+  Sets working directory to the current folder (the repo root).
+  '.' means "wherever this script/notebook is being run from."
+
+os.chdir(work_dir)
+  Changes Python's current working directory to work_dir.
+  All file paths like './data_input/...' are relative to this location.
+
+sys.path.insert(0, '.')
+  Adds the current directory to the front of Python's module search list.
+  This ensures 'from pyaez import ClimateRegime' finds the local pyaez/ folder.
+
+os.getcwd()
+  Returns and displays the current working directory. Used to confirm the
+  directory was set correctly.
+
+--- Cell 10 — Create output folder ---
+folder_path = './data_output/NB1/'
+  Defines the path where all NB1 outputs (maps and rasters) will be saved.
+
+if not os.path.exists(folder_path):
+    os.makedirs(folder_path)
+  Creates the folder only if it does not already exist.
+  os.makedirs() creates all intermediate directories as needed.
+
+================================================================================
+SECTION 2 — INITIALISE MODULE 1 CLASS
+================================================================================
+
+--- Cell 12 ---
+%load_ext autoreload
+%autoreload 2
+  Jupyter magic commands that automatically reload imported modules when their
+  source files change. Useful during development so you don't need to restart
+  the kernel after editing pyaez source files.
+
+from pyaez import ClimateRegime
+clim_reg = ClimateRegime.ClimateRegime()
+  Imports PyAEZ Module 1 and creates an instance of the ClimateRegime class.
+  'clim_reg' is the object that holds all climate data and performs all
+  calculations for this module. Think of it as an empty container that we
+  will fill with data in the next step.
+
+from pyaez import UtilitiesCalc
+obj_util = UtilitiesCalc.UtilitiesCalc()
+  Imports the utility module used mainly for saving results as GeoTIFF rasters.
+  'obj_util.saveRaster()' is called repeatedly throughout the notebook to write
+  output arrays to GeoTIFF format.
+
+================================================================================
+SECTION 3 — LOAD INPUT DATA
+================================================================================
+
+--- Cell 14 — Load climate arrays ---
+max_temp = np.load('./data_input/climate/max_temp.npy')
+  Loads the monthly maximum temperature array.
+  Shape: (87, 108, 12) — 87 rows × 108 cols (Pakistan grid) × 12 months.
+  Units: degrees Celsius.
+  Source: WorldClim v2.1, 1970–2000 climatology.
+
+min_temp = np.load('./data_input/climate/min_temp.npy')
+  Monthly minimum temperature. Same shape. Units: degrees Celsius.
+
+precipitation = np.load('./data_input/climate/precipitation.npy')
+  Monthly total precipitation. Units: mm per month.
+
+rel_humidity = np.load('./data_input/climate/relative_humidity.npy')
+  Monthly mean relative humidity. Units: fraction between 0.0 and 1.0.
+  (0.0 = completely dry, 1.0 = fully saturated air)
+
+wind_speed = np.load('./data_input/climate/wind_speed.npy')
+  Monthly mean wind speed measured at 2 metres above ground. Units: m/s.
+  (Adjusted from the original 10m WorldClim data using log wind profile)
+
+short_rad = np.load('./data_input/climate/short_rad.npy')
+  Monthly mean downwelling shortwave (solar) radiation. Units: W/m².
+  (Converted from WorldClim's kJ/m²/day by dividing by 86.4)
+
+mask_path = './data_input/PK_Admin.tif'
+  Path to the Pakistan administrative boundary raster. This variable is reused
+  throughout the notebook as a template for saving all output rasters —
+  it provides the correct geographic coordinates, resolution, and projection.
+
+mask = gdal.Open('./data_input/PK_Admin.tif').ReadAsArray()
+  Opens the admin boundary GeoTIFF and reads it into a NumPy array.
+  Values: 1 = land inside Pakistan, 0 = outside Pakistan / ocean.
+  Shape: (87, 108) — a 2D binary mask.
+
+elevation = gdal.Open('./data_input/PK_Elevation.tif').ReadAsArray()
+  Digital Elevation Model (DEM) for Pakistan. Units: metres above sea level.
+  Range in our data: 0 m (plains) to 5885 m (Karakoram/Hindu Kush peaks).
+  Used by PyAEZ to correct temperature for altitude (temperature lapse rate)
+  and to compute permafrost risk.
+
+soil_terrain_lulc = gdal.Open('./data_input/PK_soil_terrain_lulc.tif').ReadAsArray()
+  A combined raster encoding land surface type:
+    1  = general agricultural/land area
+    33 = permanent ice and snow (pixels above 4500 m elevation)
+  Used in the final AEZ classification step at the end of this notebook.
+
+--- Cell 16 — Define geographic parameters ---
+lat_min = 23.0
+  Southern boundary of Pakistan in decimal degrees (latitude).
+  PyAEZ uses this to compute sun angle, day length, and radiation at each row.
+
+lat_max = 37.5
+  Northern boundary of Pakistan in decimal degrees.
+  The model interpolates latitude linearly from lat_min to lat_max across
+  the 87 rows of the grid.
+
+mask_value = 0
+  Tells PyAEZ to skip all pixels where mask == 0 (outside Pakistan).
+  Only pixels with mask == 1 will be processed.
+
+daily = False
+  Tells PyAEZ that the climate input arrays contain MONTHLY data (12 time steps)
+  not daily data (365 time steps). PyAEZ will internally interpolate monthly
+  values to daily values for its calculations.
+
+================================================================================
+SECTION 4 — LOAD DATA INTO THE CLASS
+================================================================================
+
+--- Cell 18 ---
+clim_reg.setStudyAreaMask(mask, mask_value)
+  Passes the binary Pakistan mask to the ClimateRegime object.
+  All subsequent calculations will only be performed on pixels where mask != 0.
+
+clim_reg.setLocationTerrainData(lat_min, lat_max, elevation)
+  Passes latitude boundaries and the elevation raster.
+  Internally PyAEZ:
+    - Assigns a latitude value to each row of the grid
+    - Uses elevation to apply a temperature lapse rate correction
+      (temperature decreases ~6.5°C per 1000 m of altitude)
+    - Computes sea-level equivalent temperatures for thermal analysis
+
+if daily:
+    clim_reg.setDailyClimateData(...)
+else:
+    clim_reg.setMonthlyClimateData(min_temp, max_temp, precipitation,
+                                    short_rad, wind_speed, rel_humidity)
+  Since daily=False, monthly data is loaded. PyAEZ converts monthly averages
+  to daily time series internally using interpolation and standard day-length
+  calculations. After this call, the object has daily arrays for all variables.
+
+--- Cell 19 ---
+del(min_temp, max_temp, precipitation, short_rad, wind_speed, rel_humidity)
+  Deletes the original monthly arrays from memory after they have been loaded
+  into the clim_reg object. This frees RAM since the object now holds its own
+  internal daily copies of these arrays.
+
+================================================================================
+SECTION 5 — THERMAL CLIMATE
+================================================================================
+
+--- Cell 22 ---
+tclimate = clim_reg.getThermalClimate()
+  Classifies each pixel into one of 12 thermal climate types based on mean
+  annual temperature and seasonal temperature patterns.
+  The 12 classes follow the FAO AEZ thermal climate classification:
+    1  = Tropics, lowland (mean annual T > 20°C, no cool season)
+    2  = Tropics, highland (T > 20°C but with cool nights)
+    3  = Subtropics, warm/hot summer
+    4  = Subtropics, cool summer
+    5  = Temperate, with warm summer
+    ...up to class 12 (Boreal/arctic)
+  In Pakistan: classes 3–6 are dominant (arid subtropics to temperate highland).
+  This output is later used in Module 2 to screen which crops can grow where.
+
+plt.imshow(tclimate, cmap=plt.get_cmap('gist_ncar_r', 12), vmin=-0.3, vmax=12.5)
+  Displays the thermal climate map using 12 discrete colours.
+  'gist_ncar_r' is a rainbow-like colormap; the 12 discrete steps correspond
+  to the 12 thermal climate classes.
+
+obj_util.saveRaster(mask_path, './data_output/NB1/PK_ThermalClimate.tif', tclimate)
+  Saves the result as a GeoTIFF. The mask_path is used as a spatial template
+  so the output has the correct coordinates, projection, and pixel size.
+
+================================================================================
+SECTION 6 — THERMAL ZONES
+================================================================================
+
+--- Cell 24 ---
+tzone = clim_reg.getThermalZone()
+  Further sub-classifies climate based on the temperature regime of the
+  growing season. While getThermalClimate() is based on annual patterns,
+  getThermalZone() focuses on the temperature during the actual growing months.
+  This is used later to determine fallow requirements for each crop group.
+  Classes range from tropical humid to boreal/arctic zones.
+
+================================================================================
+SECTION 7 — THERMAL LENGTH OF GROWING PERIOD (LGPt)
+================================================================================
+
+--- Cell 26 ---
+lgpt0 = clim_reg.getThermalLGP0()
+  LGPt0 = number of days per year where mean daily temperature > 0°C.
+  Above 0°C is the minimum threshold for any biological activity in plants.
+  In Pakistan: most lowland areas have LGPt0 = 365 days (never freezes).
+  Mountain areas may drop below 0°C in winter, reducing LGPt0.
+
+lgpt5 = clim_reg.getThermalLGP5()
+  LGPt5 = number of days per year where mean daily temperature > 5°C.
+  5°C is considered the lower limit for active crop growth and development.
+  This is the most important thermal LGP indicator for most crops.
+
+lgpt10 = clim_reg.getThermalLGP10()
+  LGPt10 = number of days per year where mean daily temperature > 10°C.
+  10°C is the threshold above which frost risk is very low.
+  Also called the 'frost-free period'. Crops sensitive to frost (e.g., maize,
+  cotton) need LGPt10 > 0 to complete their cycle.
+
+--- Cell 27 — Visualization ---
+plt.figure(1, figsize=(24, 8))
+  Creates a wide figure (24 inches wide, 8 inches tall) for side-by-side plots.
+
+plt.subplot(1, 3, 1) / (1, 3, 2) / (1, 3, 3)
+  Divides the figure into 1 row of 3 columns.
+  Each subplot shows one of the three LGPt maps.
+
+vmin=0, vmax=366
+  Sets colour scale from 0 days to 366 days (full year).
+
+================================================================================
+SECTION 8 — TEMPERATURE SUMS
+================================================================================
+
+--- Cell 29 ---
+tsum0 = clim_reg.getTemperatureSum0()
+  Calculates the cumulative sum of all daily temperatures above 0°C over one
+  year. Formula: Σ max(0, Tmean_day - 0) for all days.
+  Units: degree-days (°C·days).
+  This measures total heat accumulation available to crops.
+
+tsum5 = clim_reg.getTemperatureSum5()
+  Cumulative sum of daily temperatures above 5°C.
+  More meaningful for temperate crops that don't grow below 5°C.
+
+tsum10 = clim_reg.getTemperatureSum10()
+  Cumulative sum of daily temperatures above 10°C.
+  Used for warm-season crops (maize, cotton, sugarcane) that require
+  sustained warmth to complete their growth cycle.
+  A maize crop typically needs ~1400–2000 degree-days above 10°C.
+
+--- Cell 30 ---
+cmap='hot_r', vmin=0, vmax=11000
+  Uses a reversed 'hot' colormap (white=cold, black=hot).
+  Range 0–11,000 degree-days covers the full spread from high-altitude
+  Pakistan (near 0) to the hot Sindh plains (near 8,000+).
+
+================================================================================
+SECTION 9 — TEMPERATURE PROFILES
+================================================================================
+
+--- Cell 32 ---
+tprofile = clim_reg.getTemperatureProfile()
+  Returns an array of shape (18, 87, 108) — 18 temperature profile classes
+  for each pixel.
+  The 18 profiles (A9 to B9) characterise the seasonal pattern of temperatures:
+    A-profiles: cool-season crops (winter wheat, barley)
+    B-profiles: warm-season crops (maize, rice, cotton)
+    The number (1–9) indicates the intensity/length of the warm/cool period.
+  These profiles are used in Module 2 to match crops to the right growing season.
+
+--- Cell 33 ---
+tile_list = ['A9','A8',...,'B9']
+  Names for the 18 profile classes in the correct display order.
+
+plt.subplot(6, 3, i1)
+  Creates a 6×3 grid of subplots to display all 18 profile maps at once.
+
+for i1 in range(18):
+    obj_util.saveRaster(mask_path,
+        './data_output/NB1/PK_TProfile_' + tile_list[i1] + '.tif', tprofile[i1])
+  Saves each of the 18 profile maps as a separate GeoTIFF file.
+  These files are used as inputs to Module 2's crop screening.
+
+================================================================================
+SECTION 10 — LENGTH OF GROWING PERIOD (LGP)
+================================================================================
+
+--- Cell 35 ---
+lgp = clim_reg.getLGP(Sa=100., D=1.)
+  Calculates the actual (moisture-based) Length of Growing Period.
+  This is the number of days per year when both:
+    (a) Temperature is above 5°C (thermally suitable), AND
+    (b) Soil moisture is sufficient for plant growth (precipitation > 0.5 × ETo)
+
+  Parameters:
+    Sa = 100 mm   — Available soil water holding capacity (mm of water stored
+                    in the root zone). 100 mm is a reasonable default.
+    D  = 1.0      — Coefficient controlling soil moisture depletion rate.
+
+  The LGP is the single most important agro-climatic indicator in AEZ.
+  It determines what crops can be grown and in how many seasons per year.
+
+  Pakistan LGP ranges:
+    < 75 days  — Arid/hyper-arid (Balochistan desert, Thar desert)
+    75–180 days — Semi-arid (most of Punjab and Sindh)
+    180–270 days — Sub-humid (foothills, irrigated areas)
+    > 270 days  — Humid (parts of Azad Kashmir, northern mountains)
+
+lgp_class = clim_reg.getLGPClassified(lgp)
+  Classifies the continuous LGP values into discrete FAO LGP classes:
+    Class 1: < 75 days    (arid)
+    Class 2: 75–119 days  (semi-arid)
+    Class 3: 120–179 days (sub-humid dry)
+    Class 4: 180–239 days (sub-humid moist)
+    Class 5: 240–299 days (humid)
+    Class 6: 300–365 days (per-humid)
+    Class 7: 365 days     (tropics — not applicable for Pakistan)
+
+lgp_equv = clim_reg.getLGPEquivalent()
+  Computes the LGP Equivalent, which adjusts the LGP to account for the
+  water stored in soil at the beginning of the growing season.
+  A pixel may start growing even before rainfall if residual soil moisture
+  is available from a previous wet period. This gives a longer effective
+  growing season than the raw LGP.
+
+================================================================================
+SECTION 11 — MULTI-CROPPING ZONES
+================================================================================
+
+--- Cell 38 ---
+multi_crop = clim_reg.getMultiCroppingZones(
+    tclimate, lgp, lgpt5, lgpt10, tsum0, tsum10)
+multi_crop_rainfed = multi_crop[0]
+multi_crop_irr     = multi_crop[1]
+  Determines how many crop cycles per year are climatically possible.
+  Two separate results are computed:
+    - Rainfed conditions  (depends on natural rainfall → shorter LGP)
+    - Irrigated conditions (water is supplied → longer effective LGP)
+
+  Classes (0–8):
+    0 = Not suitable (too cold, too short season)
+    1 = Single crop only
+    2 = Double cropping possible
+    3 = Triple cropping possible (rare, mainly tropical/subtropical)
+    ...higher values indicate more intensive multi-cropping potential
+
+  Inputs used:
+    tclimate — to check thermal suitability of each cycle
+    lgp      — actual growing period length (rainfed)
+    lgpt5    — thermal growing days (lower limit)
+    lgpt10   — frost-free days
+    tsum0, tsum10 — heat accumulation available
+
+================================================================================
+SECTION 12 — FROST INDEX AND PERMAFROST
+================================================================================
+
+--- Cell 41 ---
+permafrost_eval = clim_reg.AirFrostIndexandPermafrostEvaluation()
+frost_index = permafrost_eval[0]
+permafrost  = permafrost_eval[1]
+
+  frost_index: A continuous index (0.0 to 1.0) based on the ratio of
+  degree-days below 0°C to total degree-days. Values closer to 1.0
+  indicate colder climates.
+  Formula: FI = freezing_degree_days / (freezing + thawing degree_days)
+
+  permafrost: Classifies each pixel into 4 permafrost categories:
+    0 = No permafrost         (most of Pakistan's lowlands and plains)
+    1 = Sporadic permafrost   (high altitude areas, >3500m)
+    2 = Discontinuous permafrost
+    3 = Continuous permafrost (very high Karakoram/Hindu Kush, >5000m)
+    4 = (sometimes used for glaciers/permanent ice)
+
+  In Pakistan context: permafrost is mainly relevant in Gilgit-Baltistan,
+  AJK, and FATA high-altitude zones. The Indus plains have no permafrost.
+  This output feeds directly into the AEZ classification at the end.
+
+================================================================================
+SECTION 13 — FALLOW REQUIREMENT
+================================================================================
+
+--- Cell 44 ---
+tzone_fallow = clim_reg.TZoneFallowRequirement(tzone)
+  Calculates the fallow requirement percentage for each pixel based on its
+  thermal zone. Fallow = the fraction of time a field must rest between
+  cropping cycles to maintain soil fertility.
+
+  Classes (0–6):
+    0 = No fallow required        (tropics with year-round moisture)
+    1 = 1/6 fallow (≈ 2 months)
+    2 = 1/5 fallow
+    3 = 1/4 fallow (≈ 3 months)
+    4 = 1/3 fallow (≈ 4 months)
+    5 = 1/2 fallow (6 months)
+    6 = Fallow > 1/2              (very cold or arid zones)
+
+  In Pakistan: temperate zones in Punjab/KPK typically require 1/4 to 1/3
+  fallow. Arid Balochistan may require longer fallow periods.
+
+================================================================================
+SECTION 14 — AGRO-ECOLOGICAL ZONES (AEZ) CLASSIFICATION
+================================================================================
+
+--- Cell 46 ---
+aez = clim_reg.AEZClassification(
+    tclimate, lgp, lgp_equv, lgpt5, soil_terrain_lulc, permafrost)
+
+  This is the final and most important output of Module 1.
+  It combines ALL the indicators calculated above into a single AEZ class
+  for each pixel. The result is a map where each value (1–58) represents
+  a unique combination of:
+    - Thermal climate (how hot/cold the area is)
+    - LGP class (how long the growing season is)
+    - Permafrost status
+    - Land cover class (ice, water, agricultural land)
+
+  Inputs:
+    tclimate       — thermal climate class (1–12)
+    lgp            — length of growing period in days
+    lgp_equv       — LGP equivalent (moisture-adjusted)
+    lgpt5          — thermal LGP above 5°C
+    soil_terrain_lulc — land cover type (1=land, 33=ice)
+    permafrost     — permafrost class (0–4)
+
+  Output classes (1–58 meaningful classes, 0 = not applicable):
+  The 58 AEZ classes systematically combine thermal regime × moisture regime.
+  Examples for Pakistan:
+    Class 1–5   — Tropics (not present in Pakistan)
+    Class 11–20 — Sub-tropics, warm (Sindh, southern Punjab)
+    Class 21–30 — Sub-tropics, cool / Temperate warm (central Punjab, KPK)
+    Class 31–40 — Temperate cool (northern Pakistan, mountain foothills)
+    Class 41–58 — Boreal / cold (Gilgit-Baltistan highlands)
+
+plt.colorbar(ticks=np.arange(0, 59, 1))
+  Shows all 58 class values on the colorbar so each zone can be identified.
+
+================================================================================
+OUTPUTS PRODUCED BY NB1
+================================================================================
+
+All outputs are saved in ./data_output/NB1/ as both PNG maps and GeoTIFF rasters.
+
+  PK_ThermalClimate.tif/png    — 12 thermal climate classes
+  PK_ThermalZone.tif/png       — Thermal zone classification
+  PK_LGPt0.tif                 — Days/year with T > 0°C
+  PK_LGPt5.tif                 — Days/year with T > 5°C
+  PK_LGPt10.tif                — Days/year with T > 10°C (frost-free days)
+  PK_tsum0.tif                 — Annual temperature sum above 0°C (°C·days)
+  PK_tsum5.tif                 — Annual temperature sum above 5°C
+  PK_tsum10.tif                — Annual temperature sum above 10°C
+  PK_TProfile_A1..B9.tif (×18) — Temperature profile class maps
+  PK_LGP.tif/png               — Length of Growing Period (days)
+  PK_LGPEquivalent.tif/png     — LGP Equivalent (moisture-adjusted)
+  PK_multicrop_irr.tif/png     — Multi-cropping zones (irrigated)
+  PK_multicrop_rain.tif/png    — Multi-cropping zones (rainfed)
+  PK_frost_index.tif/png       — Air frost index (0–1)
+  PK_permafrost.tif/png        — Permafrost classification (0–4)
+  PK_fallow.tif/png            — Fallow requirement zones (0–6)
+  PK_aez.tif/png               — Final AEZ classification (1–58)
+
+================================================================================
+OUTPUTS USED BY DOWNSTREAM MODULES
+================================================================================
+
+  NB2 (Crop Simulation) reads:
+    PK_LGP.tif, PK_LGPt5.tif, PK_LGPt10.tif
+    PK_ThermalClimate.tif, PK_permafrost.tif
+
+  NB3 (Climatic Constraints) reads:
+    PK_LGP.tif, PK_LGPEquivalent.tif, PK_LGPt10.tif
+
+  NB6 (Economic Suitability) does not directly read NB1 outputs.
+
+================================================================================
+END OF EXPLANATION
+================================================================================
