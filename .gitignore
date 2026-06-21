@@ -10,9 +10,13 @@ build/
 .ipynb_checkpoints/
 *.ipynb_checkpoints
 
-# Data directories — not committed to git
-data_input/
-data_output/
+# Data directories — keep structure, ignore data contents
+data_input/**
+!data_input/**/
+!data_input/**/.gitkeep
+data_output/**
+!data_output/**/
+!data_output/**/.gitkeep
 
 # OS
 .DS_Store
