@@ -15,6 +15,7 @@ try:
     import gdal
 except:
     from osgeo import gdal
+gdal.UseExceptions()
 
 class UtilitiesCalc(object):
 

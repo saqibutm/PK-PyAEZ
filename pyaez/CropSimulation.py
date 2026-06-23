@@ -16,6 +16,7 @@ try:
     import gdal
 except:
     from osgeo import gdal
+gdal.UseExceptions()
 
 from pyaez import UtilitiesCalc,BioMassCalc,ETOCalc,CropWatCalc,ThermalScreening, LGPCalc
 
