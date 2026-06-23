@@ -40,10 +40,10 @@ except ImportError:
 OUT_DIR  = Path("data_input")
 RAW_DIR  = Path("data_input/raster_raw")
 
-# Target grid — must match ERA5 climate arrays (set by download_era5_pakistan.py)
-# ERA5 at 0.25° over [N=37.5, W=60.5, S=23.0, E=78.5]
+# Target grid — must match WorldClim climate arrays (10 arc-min resolution)
+# Pakistan bounding box: W=60.5, S=23.0, E=78.5, N=37.5 → 87 rows × 108 cols
 XMIN, YMIN, XMAX, YMAX = 60.5, 23.0, 78.5, 37.5
-RES = 0.25          # degrees (matches ERA5 grid)
+RES = 1 / 6        # 10 arc-min in degrees → 87×108 grid
 NODATA = -9999.0
 # ─────────────────────────────────────────────────────────────────────────────
 
